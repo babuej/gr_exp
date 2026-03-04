@@ -1,0 +1,102 @@
+python# ============================================================
+# gx_datasource.py
+# Connect Great Expectations to Spark DataFrames
+# and Delta tables
+# ============================================================
+
+from great_expectations.datasource.fluent import (
+    SparkDatasource
+)
+
+
+class GXDatabricksConnector:
+    
+    def __init__(self, context):
+        self.context = context
+    
+    def add_spark_datasource(self, 
+                              datasource_name: str):
+        """
+        Add Spark datasource - works with any
+        Spark DataFrame including Delta tables.
+        """
+        datasource = self.context.sources.add_spark(
+            name=datasource_name
+        )
+        print(f"✅ Spark datasource added: {datasource_name}")
+        return datasource
+    
+    def add_dataframe_asset(self,
+                             datasource_name: str,
+                             asset_name: str,
+                             dataframe):
+        """
+        Register a Spark DataFrame as a data asset.
+        """
+        datasource = self.context.datasources[datasource_name]
+        
+        data_asset = datasource.add_dataframe_asset(
+            name=asset_name,
+            dataframe=dataframe
+        )
+        
+        print(f"✅ DataFrame asset added: {asset_name}")
+        return data_asset
+    
+    def add_delta_table_asset(self,
+                               datasource_name: str,
+                               asset_name: str,
+                               catalog: str,
+                               schema: str,
+                               table: str,
+                               spark):
+        """
+        Register a Delta table as a data asset.
+        """
+        # Read Delta table as Spark DataFrame
+        df = spark.table(f"{catalog}.{schema}.{table}")
+        
+        return self.add_dataframe_asset(
+            datasource_name=datasource_name,
+            asset_name=asset_name,
+            dataframe=df
+        )
+    
+    def create_batch_request(self,
+                              datasource_name: str,
+                              asset_name: str):
+        """
+        Create a batch request to fetch data
+        for validation.
+        """
+        datasource = self.context.datasources[datasource_name]
+        data_asset = datasource.get_asset(asset_name)
+        batch_request = data_asset.build_batch_request()
+        return batch_request
+
+
+# ─── Usage ──────────────────────────────────────────────────
+context = create_gx_context(mode="file")
+connector = GXDatabricksConnector(context)
+
+# Add datasource
+connector.add_spark_datasource("databricks_spark")
+
+# Register Delta tables as assets
+transactions_df = spark.table(
+    "prod_catalog.silver.transactions"
+)
+connector.add_dataframe_asset(
+    datasource_name="databricks_spark",
+    asset_name="silver_transactions",
+    dataframe=transactions_df
+)
+
+customers_df = spark.table(
+    "prod_catalog.silver.customers"
+)
+connector.add_dataframe_asset(
+    datasource_name="databricks_spark",
+    asset_name="silver_customers",
+    dataframe=customers_df
+)
