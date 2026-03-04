@@ -1,0 +1,50 @@
+# Install Great Expectations
+%pip install great-expectations==0.18.0
+
+# Restart Python after install
+dbutils.library.restartPython()
+python# ============================================================
+# gx_setup.py
+# Initialize Great Expectations context in Databricks
+# ============================================================
+
+import great_expectations as gx
+from great_expectations.data_context import (
+    FileDataContext,
+    EphemeralDataContext
+)
+import os
+
+
+def create_gx_context(mode: str = "ephemeral",
+                      base_dir: str = "/dbfs/gx"):
+    """
+    Create GX context.
+    
+    mode = 'ephemeral' : in-memory, no persistence
+                         good for notebook testing
+    mode = 'file'      : persists to DBFS
+                         good for production pipelines
+    """
+    if mode == "ephemeral":
+        # In-memory context - no files written
+        context = gx.get_context(mode="ephemeral")
+        print("✅ Ephemeral GX context created")
+    
+    elif mode == "file":
+        # Persistent context on DBFS
+        os.makedirs(base_dir, exist_ok=True)
+        context = gx.get_context(
+            mode="file",
+            project_root_dir=base_dir
+        )
+        print(f"✅ File GX context created at {base_dir}")
+    
+    return context
+
+
+# Create context
+context = create_gx_context(
+    mode="file",
+    base_dir="/dbfs/great_expectations"
+)
