@@ -1,0 +1,24 @@
+Great Expectations (GX) is an open-source data quality 
+framework that allows you to:
+
+  Define   → What your data SHOULD look like (Expectations)
+  Validate → Whether your data MEETS those expectations
+  Document → Auto-generate data quality reports
+  Alert    → Fail pipelines when data quality drops
+
+Key Concepts:
+┌─────────────────────────────────────────────────────┐
+│  Expectation    │ A rule about your data             │
+│                 │ e.g. "column must not be null"     │
+├─────────────────────────────────────────────────────┤
+│  Expectation    │ Collection of expectations         │
+│  Suite          │ for a dataset                      │
+├─────────────────────────────────────────────────────┤
+│  Data Source    │ Connection to your data            │
+│                 │ (Spark, Delta, Pandas)             │
+├─────────────────────────────────────────────────────┤
+│  Checkpoint     │ Runs validation + saves results    │
+├─────────────────────────────────────────────────────┤
+│  Data Docs      │ Auto-generated HTML reports        │
+│                 │ showing pass/fail results          │
+└─────────────────────────────────────────────────────┘
