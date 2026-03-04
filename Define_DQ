@@ -1,0 +1,381 @@
+python# ============================================================
+# gx_expectations.py
+# Define data quality rules as Expectation Suites
+# ============================================================
+
+from great_expectations.core.expectation_suite import (
+    ExpectationSuite
+)
+from great_expectations.core.expectation_configuration import (
+    ExpectationConfiguration
+)
+
+
+class GXExpectationBuilder:
+    
+    def __init__(self, context):
+        self.context = context
+    
+    def create_transactions_suite(self,
+                                   suite_name: str = 
+                                   "transactions_suite"):
+        """
+        Complete expectation suite for transactions table.
+        Covers: completeness, uniqueness, validity,
+                consistency, timeliness.
+        """
+        suite = self.context.add_expectation_suite(
+            expectation_suite_name=suite_name
+        )
+        
+        expectations = [
+            
+            # ── COMPLETENESS CHECKS ──────────────────────
+            # transaction_id must never be null
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_not_be_null"
+                ),
+                kwargs={
+                    "column": "transaction_id",
+                    "meta": {
+                        "category": "completeness",
+                        "severity": "critical"
+                    }
+                }
+            ),
+            
+            # customer_id must never be null
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_not_be_null"
+                ),
+                kwargs={
+                    "column": "customer_id",
+                    "meta": {
+                        "category": "completeness",
+                        "severity": "critical"
+                    }
+                }
+            ),
+            
+            # amount allows max 1% nulls
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_not_be_null"
+                ),
+                kwargs={
+                    "column": "amount",
+                    "mostly": 0.99,  # 99% must be non-null
+                    "meta": {
+                        "category": "completeness",
+                        "severity": "high"
+                    }
+                }
+            ),
+            
+            # ── UNIQUENESS CHECKS ────────────────────────
+            # transaction_id must be unique
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_be_unique"
+                ),
+                kwargs={
+                    "column": "transaction_id",
+                    "meta": {
+                        "category": "uniqueness",
+                        "severity": "critical"
+                    }
+                }
+            ),
+            
+            # ── VALIDITY CHECKS ──────────────────────────
+            # amount must be positive
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_be_between"
+                ),
+                kwargs={
+                    "column": "amount",
+                    "min_value": 0.01,
+                    "max_value": 1_000_000,
+                    "meta": {
+                        "category": "validity",
+                        "severity": "critical"
+                    }
+                }
+            ),
+            
+            # status must be from allowed set
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_be_in_set"
+                ),
+                kwargs={
+                    "column": "status",
+                    "value_set": [
+                        "Active", "Inactive", 
+                        "Pending", "Cancelled"
+                    ],
+                    "meta": {
+                        "category": "validity",
+                        "severity": "high"
+                    }
+                }
+            ),
+            
+            # transaction_date must be valid date
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_match_strftime_format"
+                ),
+                kwargs={
+                    "column": "transaction_date",
+                    "strftime_format": "%Y-%m-%d %H:%M:%S",
+                    "mostly": 0.99,
+                    "meta": {
+                        "category": "validity",
+                        "severity": "high"
+                    }
+                }
+            ),
+            
+            # email must match email pattern
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_match_regex"
+                ),
+                kwargs={
+                    "column": "customer_email",
+                    "regex": (
+                        r"[a-zA-Z0-9._%+-]+"
+                        r"@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+                    ),
+                    "mostly": 0.95,
+                    "meta": {
+                        "category": "validity",
+                        "severity": "medium"
+                    }
+                }
+            ),
+            
+            # ── SCHEMA CHECKS ────────────────────────────
+            # Table must have required columns
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_table_columns_to_match_ordered_list"
+                ),
+                kwargs={
+                    "column_list": [
+                        "transaction_id",
+                        "customer_id",
+                        "amount",
+                        "merchant_id",
+                        "transaction_date",
+                        "status"
+                    ],
+                    "meta": {
+                        "category": "schema",
+                        "severity": "critical"
+                    }
+                }
+            ),
+            
+            # Row count must be within expected range
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_table_row_count_to_be_between"
+                ),
+                kwargs={
+                    "min_value": 1000,
+                    "max_value": 10_000_000,
+                    "meta": {
+                        "category": "volume",
+                        "severity": "high"
+                    }
+                }
+            ),
+            
+            # ── STATISTICAL CHECKS ───────────────────────
+            # Mean transaction amount should be reasonable
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_mean_to_be_between"
+                ),
+                kwargs={
+                    "column": "amount",
+                    "min_value": 10.0,
+                    "max_value": 10_000.0,
+                    "meta": {
+                        "category": "statistical",
+                        "severity": "medium"
+                    }
+                }
+            ),
+            
+            # Median amount check
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_median_to_be_between"
+                ),
+                kwargs={
+                    "column": "amount",
+                    "min_value": 5.0,
+                    "max_value": 5000.0,
+                    "meta": {
+                        "category": "statistical",
+                        "severity": "medium"
+                    }
+                }
+            ),
+            
+            # Standard deviation check (catch data anomalies)
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_stdev_to_be_between"
+                ),
+                kwargs={
+                    "column": "amount",
+                    "min_value": 1.0,
+                    "max_value": 50_000.0,
+                    "meta": {
+                        "category": "statistical",
+                        "severity": "low"
+                    }
+                }
+            ),
+        ]
+        
+        # Add all expectations to suite
+        for exp in expectations:
+            suite.add_expectation(exp)
+        
+        # Save suite
+        self.context.save_expectation_suite(suite)
+        
+        print(f"✅ Suite created with "
+              f"{len(expectations)} expectations: "
+              f"{suite_name}")
+        
+        return suite
+    
+    def create_customers_suite(self,
+                                suite_name: str = 
+                                "customers_suite"):
+        """
+        Expectation suite for customers table.
+        """
+        suite = self.context.add_expectation_suite(
+            expectation_suite_name=suite_name
+        )
+        
+        expectations = [
+            
+            # customer_id not null and unique
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_not_be_null"
+                ),
+                kwargs={"column": "customer_id"}
+            ),
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_be_unique"
+                ),
+                kwargs={"column": "customer_id"}
+            ),
+            
+            # Name must not be null
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_not_be_null"
+                ),
+                kwargs={
+                    "column": "name",
+                    "mostly": 0.98
+                }
+            ),
+            
+            # Customer tier from allowed values
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_be_in_set"
+                ),
+                kwargs={
+                    "column": "customer_tier",
+                    "value_set": [
+                        "Bronze", "Silver", 
+                        "Gold", "Platinum"
+                    ]
+                }
+            ),
+            
+            # Referential integrity check
+            # customer_id format: CUST-XXXXX
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_values_to_match_regex"
+                ),
+                kwargs={
+                    "column": "customer_id",
+                    "regex": r"^CUST-\d{5}$"
+                }
+            ),
+        ]
+        
+        for exp in expectations:
+            suite.add_expectation(exp)
+        
+        self.context.save_expectation_suite(suite)
+        print(f"✅ Customers suite created: {suite_name}")
+        return suite
+    
+    def create_bronze_suite(self,
+                             suite_name: str = 
+                             "bronze_suite"):
+        """
+        Lightweight suite for Bronze layer.
+        Only critical checks — Bronze is raw data
+        so we don't enforce strict quality.
+        """
+        suite = self.context.add_expectation_suite(
+            expectation_suite_name=suite_name
+        )
+        
+        # Only check that key columns exist
+        # and table is not empty
+        expectations = [
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_table_row_count_to_be_between"
+                ),
+                kwargs={"min_value": 1, 
+                        "max_value": 100_000_000}
+            ),
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_to_exist"
+                ),
+                kwargs={"column": "transaction_id"}
+            ),
+            ExpectationConfiguration(
+                expectation_type=(
+                    "expect_column_to_exist"
+                ),
+                kwargs={"column": "customer_id"}
+            ),
+        ]
+        
+        for exp in expectations:
+            suite.add_expectation(exp)
+        
+        self.context.save_expectation_suite(suite)
+        return suite
+
+
+# ─── Usage ──────────────────────────────────────────────────
+builder = GXExpectationBuilder(context)
+
+transactions_suite = builder.create_transactions_suite()
+customers_suite    = builder.create_customers_suite()
+bronze_suite       = builder.create_bronze_suite()
