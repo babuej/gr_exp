@@ -1,0 +1,90 @@
+# ============================================================
+# gx_data_docs.py
+# Generate and serve HTML data quality reports
+# ============================================================
+
+class GXDataDocsManager:
+    
+    def __init__(self, context):
+        self.context = context
+    
+    def build_data_docs(self):
+        """
+        Build HTML data quality report.
+        Shows pass/fail for every expectation.
+        """
+        self.context.build_data_docs()
+        print("✅ Data Docs built successfully")
+    
+    def get_docs_url(self) -> str:
+        """Get URL to view Data Docs."""
+        docs_sites = self.context.get_docs_sites_urls()
+        for site in docs_sites:
+            print(f"📊 Data Docs URL: {site['site_url']}")
+        return docs_sites[0]["site_url"] if docs_sites else None
+    
+    def save_docs_to_adls(self,
+                           storage_account: str,
+                           container: str):
+        """
+        Configure Data Docs to save to ADLS Gen2
+        so the whole team can view reports.
+        """
+        # Update GX config to use Azure Blob storage
+        data_docs_config = {
+            "class_name": "SiteBuilder",
+            "site_index_builder": {
+                "class_name": "DefaultSiteIndexBuilder"
+            },
+            "store_backend": {
+                "class_name": (
+                    "TupleAzureBlobStoreBackend"
+                ),
+                "container": container,
+                "connection_string": (
+                    f"DefaultEndpointsProtocol=https;"
+                    f"AccountName={storage_account};"
+                    f"AccountKey="
+                    f"{{{{ az_storage_account_key }}}};"
+                    f"EndpointSuffix=core.windows.net"
+                )
+            }
+        }
+        
+        self.context.add_data_docs_site(
+            site_name="adls_data_docs",
+            site_config=data_docs_config
+        )
+        
+        self.context.build_data_docs(
+            site_names=["adls_data_docs"]
+        )
+        
+        print(
+            f"✅ Data Docs published to "
+            f"https://{storage_account}.blob.core.windows.net"
+            f"/{container}/index.html"
+        )
+    
+    def display_in_notebook(self):
+        """Display Data Docs inline in Databricks notebook."""
+        url = self.get_docs_url()
+        if url:
+            displayHTML(f"""
+                <iframe 
+                    src="{url}" 
+                    width="100%" 
+                    height="800px"
+                    frameborder="0">
+                </iframe>
+            """)
+
+
+# ─── Usage ──────────────────────────────────────────────────
+docs_manager = GXDataDocsManager(context)
+docs_manager.build_data_docs()
+docs_manager.save_docs_to_adls(
+    storage_account="companyprodadls",
+    container="data-quality-reports"
+)
+docs_manager.display_in_notebook()
