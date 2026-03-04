@@ -1,0 +1,181 @@
+# ============================================================
+# gx_results_store.py
+# Persist validation results to Delta for trending/alerting
+# ============================================================
+
+from pyspark.sql.functions import (
+    current_timestamp, lit
+)
+import json
+from datetime import datetime
+
+
+class GXResultsStore:
+    
+    def __init__(self, spark, results_table: str):
+        self.spark = spark
+        self.results_table = results_table
+        self._create_results_table()
+    
+    def _create_results_table(self):
+        """Create Delta table to store DQ results."""
+        self.spark.sql(f"""
+            CREATE TABLE IF NOT EXISTS 
+            {self.results_table} (
+                run_id          STRING,
+                run_time        TIMESTAMP,
+                datasource      STRING,
+                asset           STRING,
+                suite_name      STRING,
+                expectation     STRING,
+                column_name     STRING,
+                success         BOOLEAN,
+                observed_value  STRING,
+                severity        STRING,
+                pipeline_name   STRING
+            )
+            USING DELTA
+            PARTITIONED BY (run_time)
+        """)
+    
+    def save_results(self,
+                     validation_results,
+                     datasource: str,
+                     asset: str,
+                     suite_name: str,
+                     pipeline_name: str):
+        """
+        Parse GX results and save to Delta table.
+        Enables trending and alerting over time.
+        """
+        run_id = validation_results.meta.get(
+            "run_id", {}).get("run_name", 
+            str(datetime.now()))
+        
+        rows = []
+        for result in validation_results.results:
+            rows.append((
+                run_id,
+                result.expectation_config.expectation_type,
+                result.expectation_config.kwargs
+                      .get("column", "table-level"),
+                result.success,
+                str(result.result.get(
+                    "observed_value", ""
+                )),
+                result.expectation_config.kwargs
+                      .get("meta", {})
+                      .get("severity", "unknown"),
+            ))
+        
+        schema = """
+            run_id STRING,
+            expectation STRING,
+            column_name STRING,
+            success BOOLEAN,
+            observed_value STRING,
+            severity STRING
+        """
+        
+        results_df = self.spark \
+            .createDataFrame(rows, schema) \
+            .withColumn("run_time", current_timestamp()) \
+            .withColumn("datasource", lit(datasource)) \
+            .withColumn("asset", lit(asset)) \
+            .withColumn("suite_name", lit(suite_name)) \
+            .withColumn("pipeline_name", lit(pipeline_name))
+        
+        results_df.write \
+            .format("delta") \
+            .mode("append") \
+            .saveAsTable(self.results_table)
+        
+        print(f"✅ DQ results saved to {self.results_table}")
+    
+    def get_dq_trend(self, asset: str,
+                     days: int = 30):
+        """
+        Show data quality trend over last N days.
+        Useful for identifying deteriorating pipelines.
+        """
+        trend = self.spark.sql(f"""
+            SELECT
+                DATE(run_time)    AS run_date,
+                asset,
+                COUNT(*)          AS total_checks,
+                SUM(CASE WHEN success THEN 1 ELSE 0 END)
+                                  AS passed_checks,
+                SUM(CASE WHEN NOT success THEN 1 ELSE 0 END)
+                                  AS failed_checks,
+                ROUND(
+                    SUM(CASE WHEN success THEN 1 ELSE 0 END) 
+                    * 100.0 / COUNT(*), 2
+                )                 AS pass_rate_pct
+            FROM {self.results_table}
+            WHERE asset = '{asset}'
+            AND run_time >= DATEADD(DAY, -{days}, 
+                                    CURRENT_TIMESTAMP())
+            GROUP BY DATE(run_time), asset
+            ORDER BY run_date DESC
+        """)
+        
+        print(f"\n📈 DQ TREND: {asset} (last {days} days)")
+        trend.show(truncate=False)
+        return trend
+    
+    def get_failing_expectations(self,
+                                  min_failure_rate: float = 0.1):
+        """
+        Find expectations that fail frequently.
+        Helps prioritize data quality fixes.
+        """
+        chronic_failures = self.spark.sql(f"""
+            SELECT
+                asset,
+                expectation,
+                column_name,
+                severity,
+                COUNT(*)  AS total_runs,
+                SUM(CASE WHEN NOT success THEN 1 ELSE 0 END)
+                          AS failures,
+                ROUND(
+                    SUM(CASE WHEN NOT success THEN 1 ELSE 0 END)
+                    * 100.0 / COUNT(*), 2
+                )         AS failure_rate_pct
+            FROM {self.results_table}
+            GROUP BY asset, expectation, 
+                     column_name, severity
+            HAVING failure_rate_pct >= 
+                   {min_failure_rate * 100}
+            ORDER BY failure_rate_pct DESC
+        """)
+        
+        print("⚠️  CHRONICALLY FAILING EXPECTATIONS:")
+        chronic_failures.show(truncate=False)
+        return chronic_failures
+
+
+# ─── Usage ──────────────────────────────────────────────────
+results_store = GXResultsStore(
+    spark=spark,
+    results_table="prod_catalog.governance.dq_results"
+)
+
+# After each validation run, save results
+results_store.save_results(
+    validation_results=results,
+    datasource="databricks_spark",
+    asset="silver_transactions",
+    suite_name="transactions_suite",
+    pipeline_name="medallion_pipeline"
+)
+
+# Analyze trends
+results_store.get_dq_trend(
+    asset="silver_transactions",
+    days=30
+)
+
+results_store.get_failing_expectations(
+    min_failure_rate=0.1
+)
