@@ -1,0 +1,196 @@
+# ============================================================
+# gx_checkpoints.py
+# Create and run checkpoints for validation
+# ============================================================
+
+from great_expectations.checkpoint import Checkpoint
+
+
+class GXCheckpointManager:
+    
+    def __init__(self, context):
+        self.context = context
+    
+    def create_checkpoint(self,
+                           checkpoint_name: str,
+                           datasource_name: str,
+                           asset_name: str,
+                           suite_name: str):
+        """
+        Create a checkpoint linking a data asset
+        to an expectation suite.
+        """
+        batch_request = {
+            "datasource_name": datasource_name,
+            "data_asset_name": asset_name
+        }
+        
+        checkpoint = self.context.add_checkpoint(
+            name=checkpoint_name,
+            validations=[
+                {
+                    "batch_request": batch_request,
+                    "expectation_suite_name": suite_name
+                }
+            ]
+        )
+        
+        print(f"✅ Checkpoint created: {checkpoint_name}")
+        return checkpoint
+    
+    def run_checkpoint(self,
+                        checkpoint_name: str,
+                        fail_on_error: bool = True) -> dict:
+        """
+        Run checkpoint and return results.
+        Optionally fail the pipeline on validation errors.
+        """
+        results = self.context.run_checkpoint(
+            checkpoint_name=checkpoint_name
+        )
+        
+        # Parse results
+        success = results.success
+        
+        # Collect stats
+        total_expectations = 0
+        failed_expectations = []
+        
+        for run_result in results.run_results.values():
+            validation_result = run_result[
+                "validation_result"
+            ]
+            
+            for result in validation_result.results:
+                total_expectations += 1
+                if not result.success:
+                    failed_expectations.append({
+                        "expectation": result.expectation_config
+                            .expectation_type,
+                        "column": result.expectation_config
+                            .kwargs.get("column", "table-level"),
+                        "observed_value": result.result
+                            .get("observed_value"),
+                        "severity": result.expectation_config
+                            .kwargs.get("meta", {})
+                            .get("severity", "unknown")
+                    })
+        
+        # Print summary
+        passed = total_expectations - len(failed_expectations)
+        print(f"\n{'='*50}")
+        print(f"VALIDATION RESULTS: {checkpoint_name}")
+        print(f"{'='*50}")
+        print(f"  Status : {'✅ PASSED' if success else '❌ FAILED'}")
+        print(f"  Total  : {total_expectations} expectations")
+        print(f"  Passed : {passed}")
+        print(f"  Failed : {len(failed_expectations)}")
+        
+        if failed_expectations:
+            print(f"\n  Failed Expectations:")
+            for f in failed_expectations:
+                print(
+                    f"  ❌ [{f['severity'].upper()}] "
+                    f"{f['expectation']} "
+                    f"on '{f['column']}' "
+                    f"| observed: {f['observed_value']}"
+                )
+        
+        # Fail pipeline if critical checks failed
+        if fail_on_error and not success:
+            critical_failures = [
+                f for f in failed_expectations
+                if f["severity"] == "critical"
+            ]
+            if critical_failures:
+                raise ValueError(
+                    f"❌ CRITICAL data quality failures "
+                    f"detected: "
+                    f"{[f['expectation'] for f in critical_failures]}"
+                )
+        
+        return {
+            "success": success,
+            "total": total_expectations,
+            "passed": passed,
+            "failed": len(failed_expectations),
+            "failed_details": failed_expectations
+        }
+    
+    def run_multiple_checkpoints(self,
+                                  checkpoints: list,
+                                  fail_on_critical: bool = True):
+        """
+        Run multiple checkpoints in sequence.
+        Useful for validating all Medallion layers.
+        """
+        all_results = {}
+        overall_success = True
+        
+        for cp_name in checkpoints:
+            print(f"\n🔍 Running: {cp_name}")
+            try:
+                result = self.run_checkpoint(
+                    checkpoint_name=cp_name,
+                    fail_on_error=False  # collect all results
+                )
+                all_results[cp_name] = result
+                if not result["success"]:
+                    overall_success = False
+            except Exception as e:
+                print(f"❌ Checkpoint error: {e}")
+                all_results[cp_name] = {
+                    "success": False,
+                    "error": str(e)
+                }
+                overall_success = False
+        
+        # Final summary
+        print(f"\n{'='*50}")
+        print("OVERALL VALIDATION SUMMARY")
+        print(f"{'='*50}")
+        for name, result in all_results.items():
+            status = "✅" if result["success"] else "❌"
+            print(f"  {status} {name}")
+        
+        if fail_on_critical and not overall_success:
+            raise ValueError(
+                "One or more data quality checkpoints failed"
+            )
+        
+        return all_results
+
+
+# ─── Usage ──────────────────────────────────────────────────
+cp_manager = GXCheckpointManager(context)
+
+# Create checkpoints
+cp_manager.create_checkpoint(
+    checkpoint_name="bronze_transactions_checkpoint",
+    datasource_name="databricks_spark",
+    asset_name="bronze_transactions",
+    suite_name="bronze_suite"
+)
+
+cp_manager.create_checkpoint(
+    checkpoint_name="silver_transactions_checkpoint",
+    datasource_name="databricks_spark",
+    asset_name="silver_transactions",
+    suite_name="transactions_suite"
+)
+
+cp_manager.create_checkpoint(
+    checkpoint_name="silver_customers_checkpoint",
+    datasource_name="databricks_spark",
+    asset_name="silver_customers",
+    suite_name="customers_suite"
+)
+
+# Run all checkpoints
+results = cp_manager.run_multiple_checkpoints(
+    checkpoints=[
+        "bronze_transactions_checkpoint",
+        "silver_transactions_checkpoint",
+        "silver_customers_checkpoint"
+    ]
+)
