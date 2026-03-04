@@ -1,0 +1,236 @@
+# ============================================================
+# gx_pipeline_integration.py
+# Plug GX validation into Bronze → Silver → Gold pipeline
+# ============================================================
+
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import (
+    col, current_timestamp, lit
+)
+
+
+class MedallionPipelineWithGX:
+    
+    def __init__(self, spark, context,
+                 cp_manager: GXCheckpointManager,
+                 connector: GXDatabricksConnector):
+        self.spark = spark
+        self.context = context
+        self.cp_manager = cp_manager
+        self.connector = connector
+    
+    def validate_dataframe(self,
+                            df: DataFrame,
+                            suite_name: str,
+                            asset_name: str,
+                            fail_on_critical: bool = True
+                            ) -> dict:
+        """
+        Validate any DataFrame inline using GX.
+        No checkpoint needed — direct validation.
+        """
+        # Add temp asset
+        datasource = self.context.datasources[
+            "databricks_spark"
+        ]
+        
+        temp_asset = datasource.add_dataframe_asset(
+            name=f"temp_{asset_name}",
+            dataframe=df
+        )
+        
+        batch_request = temp_asset.build_batch_request()
+        
+        # Run validation
+        validator = self.context.get_validator(
+            batch_request=batch_request,
+            expectation_suite_name=suite_name
+        )
+        
+        results = validator.validate()
+        
+        success = results.success
+        failed = [
+            r for r in results.results 
+            if not r.success
+        ]
+        
+        print(f"Validation '{suite_name}': "
+              f"{'✅ PASSED' if success else '❌ FAILED'} "
+              f"({len(failed)} failures)")
+        
+        if fail_on_critical and not success:
+            critical = [
+                r for r in failed
+                if r.expectation_config.kwargs
+                    .get("meta", {})
+                    .get("severity") == "critical"
+            ]
+            if critical:
+                raise ValueError(
+                    f"Critical DQ failure in {asset_name}: "
+                    f"{[r.expectation_config.expectation_type for r in critical]}"
+                )
+        
+        return {
+            "success": success,
+            "total": len(results.results),
+            "failed": len(failed),
+            "results": results
+        }
+    
+    def run_bronze_ingestion(self,
+                              source_path: str,
+                              target_table: str) -> DataFrame:
+        """Bronze ingestion with DQ validation."""
+        print("📥 Step 1: Bronze Ingestion")
+        
+        # Ingest raw data
+        raw_df = self.spark.read \
+            .format("json") \
+            .load(source_path) \
+            .withColumn("_ingested_at", 
+                        current_timestamp())
+        
+        # Validate bronze (lightweight checks)
+        dq_result = self.validate_dataframe(
+            df=raw_df,
+            suite_name="bronze_suite",
+            asset_name="bronze_ingestion",
+            fail_on_critical=True
+        )
+        
+        # Write to bronze
+        raw_df.write \
+            .format("delta") \
+            .mode("append") \
+            .saveAsTable(target_table)
+        
+        print(f"✅ Bronze: {raw_df.count():,} records loaded")
+        return raw_df
+    
+    def run_silver_transformation(self,
+                                   bronze_table: str,
+                                   silver_table: str,
+                                   quarantine_table: str
+                                   ) -> DataFrame:
+        """Silver transformation with DQ validation."""
+        print("\n🔄 Step 2: Silver Transformation")
+        
+        bronze_df = self.spark.table(bronze_table)
+        
+        # Apply transformations
+        cleaned_df = bronze_df \
+            .withColumn("amount",
+                        col("amount").cast("double")) \
+            .withColumn("status",
+                        col("status").cast("string"))
+        
+        # Tag valid vs invalid
+        validated_df = cleaned_df.withColumn(
+            "_is_valid",
+            col("transaction_id").isNotNull() &
+            col("customer_id").isNotNull() &
+            col("amount").isNotNull() &
+            (col("amount") > 0)
+        )
+        
+        valid_df = validated_df \
+            .filter(col("_is_valid")) \
+            .drop("_is_valid")
+        
+        invalid_df = validated_df \
+            .filter(~col("_is_valid")) \
+            .drop("_is_valid") \
+            .withColumn("_quarantined_at",
+                        current_timestamp())
+        
+        # Validate silver with GX
+        dq_result = self.validate_dataframe(
+            df=valid_df,
+            suite_name="transactions_suite",
+            asset_name="silver_transactions",
+            fail_on_critical=True
+        )
+        
+        # Write valid to silver
+        valid_df.write \
+            .format("delta") \
+            .mode("overwrite") \
+            .saveAsTable(silver_table)
+        
+        # Write invalid to quarantine
+        if invalid_df.count() > 0:
+            invalid_df.write \
+                .format("delta") \
+                .mode("append") \
+                .saveAsTable(quarantine_table)
+            print(f"⚠️  Quarantined: "
+                  f"{invalid_df.count():,} records")
+        
+        print(f"✅ Silver: {valid_df.count():,} records")
+        return valid_df
+    
+    def run_gold_aggregation(self,
+                              silver_table: str,
+                              gold_table: str) -> DataFrame:
+        """Gold aggregation with DQ validation."""
+        print("\n🥇 Step 3: Gold Aggregation")
+        
+        from pyspark.sql.functions import (
+            sum as spark_sum, count, avg
+        )
+        
+        silver_df = self.spark.table(silver_table)
+        
+        gold_df = silver_df \
+            .groupBy("customer_id") \
+            .agg(
+                count("transaction_id")
+                    .alias("total_transactions"),
+                spark_sum("amount")
+                    .alias("lifetime_value"),
+                avg("amount")
+                    .alias("avg_transaction_value")
+            )
+        
+        # Validate gold layer
+        dq_result = self.validate_dataframe(
+            df=gold_df,
+            suite_name="customers_suite",
+            asset_name="gold_customer_metrics",
+            fail_on_critical=False  # warn only for gold
+        )
+        
+        gold_df.write \
+            .format("delta") \
+            .mode("overwrite") \
+            .saveAsTable(gold_table)
+        
+        print(f"✅ Gold: {gold_df.count():,} records")
+        return gold_df
+
+
+# ─── Run Full Pipeline ───────────────────────────────────────
+pipeline = MedallionPipelineWithGX(
+    spark=spark,
+    context=context,
+    cp_manager=cp_manager,
+    connector=connector
+)
+
+pipeline.run_bronze_ingestion(
+    source_path="/mnt/raw/transactions/",
+    target_table="prod_catalog.bronze.transactions"
+)
+
+pipeline.run_silver_transformation(
+    bronze_table="prod_catalog.bronze.transactions",
+    silver_table="prod_catalog.silver.transactions",
+    quarantine_table="prod_catalog.bronze.transactions_quarantine"
+)
+
+pipeline.run_gold_aggregation(
+    silver_table="prod_catalog.silver.transactions",
+    gold_table="prod_catalog.gold.customer_metrics"
+)
