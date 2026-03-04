@@ -1,0 +1,76 @@
+# ── COMPLETENESS ─────────────────────────────────────────────
+expect_column_values_to_not_be_null(column, mostly=1.0)
+expect_column_values_to_not_be_none(column)
+
+# ── UNIQUENESS ───────────────────────────────────────────────
+expect_column_values_to_be_unique(column)
+expect_compound_columns_to_be_unique(column_list)
+
+# ── VALIDITY ─────────────────────────────────────────────────
+expect_column_values_to_be_between(column, min, max)
+expect_column_values_to_be_in_set(column, value_set)
+expect_column_values_to_match_regex(column, regex)
+expect_column_values_to_be_of_type(column, type_)
+expect_column_values_to_match_strftime_format(column, fmt)
+
+# ── SCHEMA ───────────────────────────────────────────────────
+expect_column_to_exist(column)
+expect_table_columns_to_match_ordered_list(column_list)
+expect_table_columns_to_match_set(column_set)
+
+# ── VOLUME ───────────────────────────────────────────────────
+expect_table_row_count_to_be_between(min, max)
+expect_table_row_count_to_equal(value)
+
+# ── STATISTICAL ──────────────────────────────────────────────
+expect_column_mean_to_be_between(column, min, max)
+expect_column_median_to_be_between(column, min, max)
+expect_column_stdev_to_be_between(column, min, max)
+expect_column_sum_to_be_between(column, min, max)
+expect_column_min_to_be_between(column, min, max)
+expect_column_max_to_be_between(column, min, max)
+
+# ── DISTRIBUTION ─────────────────────────────────────────────
+expect_column_quantile_values_to_be_between(
+    column,
+    quantile_ranges={
+        "quantiles": [0.25, 0.5, 0.75],
+        "value_ranges": [[0,100],[50,500],[200,2000]]
+    }
+)
+
+# ── RELATIONSHIP ─────────────────────────────────────────────
+expect_column_pair_values_a_to_be_greater_than_b(
+    column_A, column_B
+)
+```
+
+---
+
+# 🔷 GX vs DLT Expectations — When to Use Which
+```
+┌─────────────────────┬──────────────────────────────────────┐
+│  Great Expectations │  Delta Live Tables Expectations      │
+├─────────────────────┼──────────────────────────────────────┤
+│  Rich library of    │  Simple SQL WHERE conditions         │
+│  100+ expectations  │                                      │
+├─────────────────────┼──────────────────────────────────────┤
+│  Works on any       │  Only works inside DLT pipelines     │
+│  Spark DataFrame    │                                      │
+├─────────────────────┼──────────────────────────────────────┤
+│  Auto-generates     │  No built-in reporting               │
+│  HTML reports       │                                      │
+├─────────────────────┼──────────────────────────────────────┤
+│  Statistical checks │  No statistical checks               │
+│  (mean, std, etc.)  │                                      │
+├─────────────────────┼──────────────────────────────────────┤
+│  Best for:          │  Best for:                           │
+│  Complex DQ rules,  │  Simple row-level rules inside       │
+│  reporting,         │  DLT pipelines with quarantine       │
+│  cross-system DQ    │  built in                            │
+└─────────────────────┴──────────────────────────────────────┘
+
+Recommendation: Use BOTH
+  DLT Expectations → row-level filtering inside DLT
+  Great Expectations → suite-level validation, 
+                       reporting, and trending
